@@ -34,7 +34,7 @@ def setup_logging(task_name, info=""):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model', type=str, default=None)
+    parser.add_argument('--model', type=str, default='CGCDR')
     parser.add_argument('--seed', type=int, default=2025)
     parser.add_argument('--epoch', type=int, default=1000)
     parser.add_argument('--lr', type=float, default=0.001)
