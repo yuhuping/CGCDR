@@ -13,20 +13,18 @@ from models import *
 from trainer import *
 
 def setup_logging(task_name, info=""):
-    # 创建logs目录如果不存在
     if not os.path.exists('log'):
         os.makedirs('log')
     
-    # 设置日志文件名（添加info参数）
-    if info:  # 如果info不为空，添加到文件名中
+    if info:  
         log_filename = f"log/{task_name}_{info}.log"
     else:
         log_filename = f"log/{task_name}.log"
-    # 配置日志
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S',  # 去掉毫秒部分
+        datefmt='%Y-%m-%d %H:%M:%S', 
         handlers=[
             logging.FileHandler(log_filename),
             logging.StreamHandler()
@@ -41,20 +39,17 @@ if __name__ == '__main__':
     parser.add_argument('--epoch', type=int, default=1000)
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--stopping_step', type=int, default=20)
-    parser.add_argument('--Task', type=str, default='Sport_Cloth')
-    parser.add_argument('--val_ratio', type=float, default=0.1, help='验证集比例')
-    parser.add_argument('--All', type=bool, default=False, help='是否使用全部模型跑')
-    parser.add_argument('--alpha', type=float, default=0.01, help='聚类学习损失权重')
-    parser.add_argument('--beta', type=float, default=0.001, help='CGCDR对比学习权重')
-    # 添加info参数用于日志文件名
-    parser.add_argument('--info', type=str, default='', help='日志文件命名信息')
+    parser.add_argument('--Task', type=str, default='Game_Video')
+    parser.add_argument('--val_ratio', type=float, default=0.1)
+    parser.add_argument('--All', type=bool, default=False)
+    parser.add_argument('--alpha', type=float, default=0.01)
+    parser.add_argument('--beta', type=float, default=0.001)
+    parser.add_argument('--info', type=str, default='')
     args = parser.parse_args()
 
-    # 设置日志
     logger = setup_logging(args.Task, args.info)
     
     # Print all arguments
-    # 打印所有参数
     logger.info("Arguments:")
     for arg in vars(args):
         logger.info(f"{arg}: {getattr(args, arg)}")
