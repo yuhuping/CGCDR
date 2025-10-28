@@ -14,11 +14,9 @@ from models import *
 import gc
 class CGCDRTrainer():
     def __init__(self, model, args, data_info):
-        """
-        GenCDR 模型训练器（本版仅包含源域/目标域兴趣聚类阶段）
-        """
+
         self.model = model
-        self.model_name = 'GenCDR'
+        self.model_name = 'CGCDR'
         self.data_root = './data/ready/' + args.Task + '/'
         self.epoch = args.epoch
         self.lr = args.lr
@@ -34,9 +32,7 @@ class CGCDRTrainer():
 
     @torch.no_grad()
     def eval_leave_one_out(self, data, neg_sample_size=999, hit_ks=(1, 5, 10)):
-        """
-        留一法评估：使用目标域用户兴趣聚类表征与目标域物品做打分
-        """
+
         loader = DataLoader(data, batch_size=1, shuffle=False)
         self.model.eval()
 
@@ -50,7 +46,6 @@ class CGCDRTrainer():
             pos_id = pos_id.to(self.device)
             tgt_iids = tgt_iids.to(self.device)
 
-            # 目标域用户聚类表征
             u_emb = self.model(uid, src_ids, pos_id, neg_ids=None, stage='eval_overlap').squeeze(0)  # [D]
 
             pos_id_np = pos_id.cpu().numpy()
@@ -120,10 +115,6 @@ class CGCDRTrainer():
 
     @torch.no_grad()
     def _prepare_kmeans_for_domain(self, loader, domain: str, k: int):
-        """
-        用用户嵌入做一次KMeans，初始化 GenCDR 的聚类中心。
-        domain: 'src' or 'tgt'
-        """
         self.model.eval()
         feats = []
         for uids, *_ in tqdm(loader, desc=f"KMeans init ({domain})", ncols=100):
@@ -150,15 +141,13 @@ class CGCDRTrainer():
             train_size = total - val_size
             return random_split(ds, [train_size, val_size], generator=torch.Generator().manual_seed(self.seed))
         if self.epoch != 0:
-            # 数据集
+
             src_full = SeqItemDataset(os.path.join(self.data_root, 'stage1_train_src.csv'))
             tgt_full = SeqItemDataset(os.path.join(self.data_root, 'stage1_train_tgt.csv'))
-        
-            # 先做一次 KMeans 初始化聚类中心（源域/目标域各一次）
-            # 与 ELCRecTrainer 209-234 的思路对齐：先准备特征，再训练聚类器，最后写回中心
+
             k_src = self.model.src_clusters.size(0)
             k_tgt = self.model.tgt_clusters.size(0)
-            # 使用“完整”数据更稳（而不是拆分后的train/val），也可以直接用 train_*_loader
+
             full_src_loader = DataLoader(src_full, batch_size=2048, shuffle=False)
             full_tgt_loader = DataLoader(tgt_full, batch_size=2048, shuffle=False)
             # self._prepare_kmeans_for_domain(full_src_loader, 'src', k_src)
@@ -183,7 +172,6 @@ class CGCDRTrainer():
 
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
 
-        # 源域阶段
         best_metric = float('inf')
         count = 0
         for epoch in range(self.epoch):
@@ -217,7 +205,6 @@ class CGCDRTrainer():
                 if count >= self.stopping_step:
                     break
 
-        # 目标域阶段
         self.model.load_state_dict(torch.load(os.path.join(self.out_path, f'{self.model_name}_pretrain.pt')), strict=False)
         best_metric = float('inf')
         count = 0
@@ -253,8 +240,6 @@ class CGCDRTrainer():
                     break
         
         for k in [20]:  # for Parameter Analysis
-            # 重叠用户生成式阶段：使用 meta 数据 (uid, src_ids, pos, neg)
-            # 仅优化生成器与聚类（端到端），目标是生成的目标域兴趣贴近真实目标域用户嵌入
             self.model.load_state_dict(torch.load(os.path.join(self.out_path, f'{self.model_name}_pretrain.pt')), strict=False)
             self.logger.info(f"Start with K_number={k}")
             self.model.k_number = k
@@ -301,6 +286,5 @@ class CGCDRTrainer():
                     if count >= 20:
                         break
 
-            # 测试
             self.model.load_state_dict(torch.load(os.path.join(self.out_path, f'{self.model_name}_best.pt')))
             self.eval_leave_one_out(data_test, neg_sample_size=999)
