@@ -57,7 +57,7 @@ class CGCDRTrainer():
                 MIN=self.target_start,
                 MAX=self.target_end,
                 neg_sample_size=neg_sample_size,
-                seed=self.seed
+                seed=self.seed + 2
             )
 
             candidate_tensor = torch.tensor(cand_ids, dtype=torch.long, device=self.device)
