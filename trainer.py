@@ -236,7 +236,7 @@ class CGCDRTrainer():
                 torch.save(self.model.state_dict(), os.path.join(self.out_path, f'{self.model_name}_pretrain.pt'))
             else:
                 count += 1
-                if count >= self.stopping_step + 10:
+                if count >= self.stopping_step:
                     break
         
         for k in [20]:  # for Parameter Analysis
@@ -283,7 +283,7 @@ class CGCDRTrainer():
 
                 else:
                     count += 1
-                    if count >= 20:
+                    if count >= self.stopping_step:
                         break
 
             self.model.load_state_dict(torch.load(os.path.join(self.out_path, f'{self.model_name}_best.pt')))
