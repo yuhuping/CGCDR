@@ -140,7 +140,6 @@ class CGCDR(nn.Module):
 
             u_src = self.src_user_emb(uids)  # [B, D]
             seq_emb = self.src_item_emb(item_seq)  # [B, L, D]
-            
 
             k = self.k_number  
             seq_emb = seq_emb[:, :k, :]  #  [B, k, D]
@@ -152,26 +151,24 @@ class CGCDR(nn.Module):
             centers_src = self.src_clusters  # [K_s, D]
             Ks = centers_src.size(0)
             
-            # 1) pairwise distances between each item and each cluster center
+            # pairwise distances between each item and each cluster center
             seq_flat = seq_emb.reshape(B * L, D) # [B*L, D]
             dist = self._pairwise_squared_distance(seq_flat, centers_src) # [B*L, Ks]
             dist = dist.view(B, L, Ks)
 
             # print(f'dist: {dist[:10]}')
-            # 2) convert to similarity and soft-assign each item to clusters
+            # convert to similarity and soft-assign each item to clusters
             sim = -dist 
             tau = 0.1
             w = F.softmax(sim / (tau + 1e-12), dim=-1) # [B, L, Ks]
-            # 3) weighted aggregation to get cluster-level summaries per user
+            # weighted aggregation to get cluster-level summaries per user
             # summaries: [B, Ks, D]
             w_t = w.permute(0, 2, 1) # [B, Ks, L]
             summaries = torch.matmul(w_t, seq_emb) # [B, Ks, D]
             norm = w_t.sum(dim=-1, keepdim=True).clamp(min=1e-6) # [B, Ks, 1]
             summaries = summaries / norm # [B, Ks, D]
-            # 4) compute cluster activity (how much each cluster is supported by user's items)
+            # compute cluster activity (how much each cluster is supported by user's items)
             cluster_activity = norm.squeeze(-1) # [B, Ks]
-
-            # 5) choose Top-M active clusters per user 
             top_M = 10
             M = min(top_M, Ks)
             topk_vals, topk_idx = torch.topk(cluster_activity, M, dim=1) # [B, M]
@@ -180,7 +177,7 @@ class CGCDR(nn.Module):
             batch_idx = torch.arange(B).unsqueeze(1)
             topk_summaries = summaries[batch_idx, topk_idx] # [B, M, D]
             topk_centers = centers_src[topk_idx.view(-1)].view(B, M, D)
-            # 6) generate candidates per selected cluster
+            # generate candidates per selected cluster
             # add small gaussian noise to summaries to inject diversity
             z = torch.randn_like(topk_summaries) * 0.05
 
@@ -200,7 +197,7 @@ class CGCDR(nn.Module):
 
             gen_out = gen_out.view(B, M, D) # [B, M, D]
 
-            # 7) scoring (attention) over the M candidates per user
+            # scoring (attention) over the M candidates per user
             # fuse_score is a linear layer: [D] -> 1
             score_in = gen_out
             score = self.fuse_score(score_in).squeeze(-1) # [B, M]
