@@ -10,3 +10,25 @@ Step2: python run.py --Task=Game_Video --alpha=0.001 --beta=0.001
 
 Note: The complete dataset will be available after acceptance.
 
+=================================================================
+Complete Dataset:
+https://drive.google.com/file/d/1lb10uo-v_cg2jQHQrde0tJMPXdHvAlem/view?usp=drive_link
+The Structure After unzip：
+CGCDR/
+├── data/
+│   ├── Cloth_Sport/
+│   │   ├── stage1_test.csv
+│   │   ├── stage1_train_meta.csv
+│   │   ├── stage1_train_src.csv
+│   │   ├── stage1_train_tgt.csv
+│   │   └── stage1_val.csv
+│   ├── CD_Movies/...
+│   ├── Elec_Phone/...
+│   ├── Sport_Cloth/...
+│   ├── Movies_CD/...  
+│    ...
+|
+├── models.py
+├── run.py
+├── trainer.py
+└── utils.py
