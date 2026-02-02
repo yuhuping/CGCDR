@@ -58,7 +58,7 @@ if __name__ == '__main__':
     torch.cuda.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    with open('./data/ready/'+ args.Task + '/'+'id_info.json', 'r') as f:
+    with open('./data/'+ args.Task + '/'+'id_info.json', 'r') as f:
             data_info = json.load(f)
     total_num_users = data_info['total_num_users']
     total_num_items = data_info['total_num_items']
