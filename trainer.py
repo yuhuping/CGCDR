@@ -17,7 +17,7 @@ class CGCDRTrainer():
 
         self.model = model
         self.model_name = 'CGCDR'
-        self.data_root = './data/ready/' + args.Task + '/'
+        self.data_root = './data/' + args.Task + '/'
         self.epoch = args.epoch
         self.lr = args.lr
         self.stopping_step = args.stopping_step
