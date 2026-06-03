@@ -62,10 +62,6 @@ class CGCDR(nn.Module):
 
         self.bpr_loss = lambda pos, neg: -torch.log(torch.sigmoid(pos - neg) + 1e-8).mean()
 
-        nn.init.xavier_normal_(self.src_user_emb.weight)
-        nn.init.xavier_normal_(self.src_item_emb.weight)
-        nn.init.xavier_normal_(self.tgt_user_emb.weight)
-        nn.init.xavier_normal_(self.tgt_item_emb.weight)
         nn.init.xavier_normal_(self.src_clusters)
         nn.init.xavier_normal_(self.tgt_clusters)
 
