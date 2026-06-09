@@ -11,6 +11,9 @@ import os
 
 from models import *
 from trainer import *
+from disco import DisCo
+from disco_trainer import DisCoTrainer
+from disco_utils import load_or_build_domain_graph
 
 def setup_logging(task_name, info=""):
     if not os.path.exists('log'):
@@ -45,6 +48,22 @@ if __name__ == '__main__':
     parser.add_argument('--alpha', type=float, default=0.01)
     parser.add_argument('--beta', type=float, default=0.001)
     parser.add_argument('--info', type=str, default='')
+    parser.add_argument('--emb_dim', type=int, default=128)
+    parser.add_argument('--batch_size', type=int, default=1024)
+    parser.add_argument('--num_workers', type=int, default=0)
+    parser.add_argument('--weight_decay', type=float, default=0.0)
+    parser.add_argument('--grad_clip', type=float, default=5.0)
+    parser.add_argument('--eval_negatives', type=int, default=999)
+    parser.add_argument('--num_intents', type=int, default=4)
+    parser.add_argument('--graph_neighbors', type=int, default=10)
+    parser.add_argument('--random_walk_steps', type=int, default=3)
+    parser.add_argument('--temperature', type=float, default=0.2)
+    parser.add_argument('--ema_decay', type=float, default=0.99)
+    parser.add_argument('--dropout', type=float, default=0.1)
+    parser.add_argument('--disco_alpha', type=float, default=0.1)
+    parser.add_argument('--disco_beta', type=float, default=0.3)
+    parser.add_argument('--disco_gamma', type=float, default=0.01)
+    parser.add_argument('--disco_lambda', type=float, default=0.3)
     args = parser.parse_args()
 
     logger = setup_logging(args.Task, args.info)
@@ -83,3 +102,39 @@ if __name__ == '__main__':
         model = CGCDR(num_users=total_num_users, num_items=total_num_items+1, emb_dim=64, data_info=data_info, src_num_clusters=src_num_clusters, tgt_num_clusters=tgt_num_clusters, alpha=alpha, beta=beta).cuda()
         trainer = CGCDRTrainer(model,args,data_info)
         trainer.main()
+    elif args.model.lower() == 'disco':
+        data_root = os.path.join('data', args.Task)
+        logger.info("Building/loading DisCo bipartite graphs")
+        source_graph = load_or_build_domain_graph(
+            data_root,
+            data_info,
+            'src',
+            max_neighbors=args.graph_neighbors,
+            seed=args.seed,
+        )
+        target_graph = load_or_build_domain_graph(
+            data_root,
+            data_info,
+            'tgt',
+            max_neighbors=args.graph_neighbors,
+            seed=args.seed + 1,
+        )
+        model = DisCo(
+            num_users=total_num_users,
+            source_graph=source_graph,
+            target_graph=target_graph,
+            embedding_dim=args.emb_dim,
+            num_intents=args.num_intents,
+            alpha=args.disco_alpha,
+            beta=args.disco_beta,
+            gamma=args.disco_gamma,
+            contrast_weight=args.disco_lambda,
+            temperature=args.temperature,
+            random_walk_steps=args.random_walk_steps,
+            ema_decay=args.ema_decay,
+            dropout=args.dropout,
+        )
+        trainer = DisCoTrainer(model, args, data_info)
+        trainer.main()
+    else:
+        raise ValueError(f"Unknown model: {args.model}")

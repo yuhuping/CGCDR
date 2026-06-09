@@ -101,6 +101,21 @@ Other available tasks:
 
 `Sport_Cloth` | `Cloth_Sport` | `Game_Video` | `Video_Game` | `Movies_CD` | `CD_Movies` | `Elec_Phone` | `Phone_Elec`
 
+### DisCo
+
+The repository also contains a paper-based reimplementation of **DisCo:
+Graph-Based Disentangled Contrastive Learning for Cold-Start Cross-Domain
+Recommendation**:
+
+```bash
+python run.py --model=DisCo --Task=Sport_Cloth --epoch=100 \
+  --emb_dim=128 --num_intents=4 --graph_neighbors=10 \
+  --random_walk_steps=3 --disco_beta=0.3 --disco_lambda=0.3
+```
+
+On the first run, capped source/target bipartite adjacency tables are built
+from the existing stage-1 CSV files and cached under `data/<Task>/`.
+
 ## Main Arguments
 
 | Argument | Description |
