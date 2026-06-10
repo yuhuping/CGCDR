@@ -79,13 +79,17 @@ class DisentangledGraphEncoder(nn.Module):
         user_degree = self.user_degree[user_ids].unsqueeze(1)
         item_degree = self.item_degree[item_ids]
         weights = torch.rsqrt(user_degree * item_degree)
-        return weights * mask
+        sampled_degree = mask.sum(dim=1, keepdim=True).clamp_min(1)
+        correction = user_degree / sampled_degree
+        return weights * mask * correction
 
     def _item_edge_weights(self, item_ids, user_ids, mask):
         item_degree = self.item_degree[item_ids].unsqueeze(1)
         user_degree = self.user_degree[user_ids]
         weights = torch.rsqrt(item_degree * user_degree)
-        return weights * mask
+        sampled_degree = mask.sum(dim=1, keepdim=True).clamp_min(1)
+        correction = item_degree / sampled_degree
+        return weights * mask * correction
 
     def shared_users(self, user_ids):
         neighbors, mask = self._safe_neighbors(self.user_neighbors[user_ids])
@@ -191,14 +195,10 @@ class DisCo(nn.Module):
             nn.LeakyReLU(negative_slope),
             nn.Linear(embedding_dim, embedding_dim),
         )
-        self.source_prototypes = nn.Parameter(
+        self.intent_prototypes = nn.Parameter(
             torch.empty(num_intents, embedding_dim)
         )
-        self.target_prototypes = nn.Parameter(
-            torch.empty(num_intents, embedding_dim)
-        )
-        nn.init.xavier_uniform_(self.source_prototypes)
-        nn.init.xavier_uniform_(self.target_prototypes)
+        nn.init.xavier_uniform_(self.intent_prototypes)
 
     def _freeze_momentum_encoders(self):
         for encoder in (
@@ -238,10 +238,8 @@ class DisCo(nn.Module):
     def recommendation_loss(self, domain, users, positive_items, negative_items):
         if domain == "src":
             encoder = self.source_encoder
-            prototypes = self.source_prototypes
         elif domain == "tgt":
             encoder = self.target_encoder
-            prototypes = self.target_prototypes
         else:
             raise ValueError("domain must be 'src' or 'tgt'")
 
@@ -249,7 +247,7 @@ class DisCo(nn.Module):
         user_intents = encoder.encode_users(users)
         item_intents = encoder.encode_items(items)
         positive_intents, negative_intents = item_intents.chunk(2, dim=0)
-        prior = self._intent_prior(user_intents, prototypes)
+        prior = self._intent_prior(user_intents, self.intent_prototypes)
         positive_logits = (
             prior * (user_intents * positive_intents).sum(dim=-1)
         ).sum(dim=1)
@@ -294,25 +292,23 @@ class DisCo(nn.Module):
 
     @staticmethod
     def _orthogonality_loss(intents):
-        if intents.size(0) < 2:
-            return intents.new_zeros(())
-        centered = intents - intents.mean(dim=0, keepdim=True)
-        centered = centered / (
-            centered.std(dim=0, unbiased=False, keepdim=True) + 1e-6
-        )
-        covariance = torch.einsum("bkd,bke->kde", centered, centered)
-        covariance = covariance / intents.size(0)
+        normalized = F.normalize(intents, dim=-1)
+        gram = torch.bmm(normalized, normalized.transpose(1, 2))
         identity = torch.eye(
-            intents.size(-1), device=intents.device, dtype=intents.dtype
+            intents.size(1), device=intents.device, dtype=intents.dtype
         )
-        return (covariance - identity.unsqueeze(0)).square().mean()
+        return (gram - identity.unsqueeze(0)).square().mean()
 
-    def contrastive_loss(self, users):
-        source_online = self.source_encoder.encode_users(users)
-        target_online = self.target_encoder.encode_users(users)
+    def contrastive_loss(self, source_users, target_users, overlap_users):
+        source_users = torch.unique(source_users)
+        target_users = torch.unique(target_users)
+        overlap_users = torch.unique(overlap_users)
+
+        source_online = self.source_encoder.encode_users(source_users)
+        target_online = self.target_encoder.encode_users(target_users)
         with torch.no_grad():
-            source_target = self.source_momentum_encoder.encode_users(users)
-            target_target = self.target_momentum_encoder.encode_users(users)
+            source_target = self.source_momentum_encoder.encode_users(source_users)
+            target_target = self.target_momentum_encoder.encode_users(target_users)
 
         intra = self._intra_domain_loss(
             source_online, source_target
@@ -320,7 +316,12 @@ class DisCo(nn.Module):
         orthogonal = self._orthogonality_loss(
             source_online
         ) + self._orthogonality_loss(target_online)
-        inter = self._inter_domain_loss(source_online, target_target)
+        overlap_source = self.source_encoder.encode_users(overlap_users)
+        with torch.no_grad():
+            overlap_target = self.target_momentum_encoder.encode_users(
+                overlap_users
+            )
+        inter = self._inter_domain_loss(overlap_source, overlap_target)
         return self.beta * inter + (1.0 - self.beta) * (
             intra + self.gamma * orthogonal
         )
@@ -336,7 +337,7 @@ class DisCo(nn.Module):
         log_likelihood = F.log_softmax(
             logits / self.temperature, dim=-1
         )
-        prior = self._intent_prior(mapped_source, self.target_prototypes)
+        prior = self._intent_prior(mapped_source, self.intent_prototypes)
         log_prior = torch.log(prior.clamp_min(1e-12))
 
         with torch.no_grad():
@@ -363,7 +364,9 @@ class DisCo(nn.Module):
     def total_loss(self, source_batch, target_batch, overlap_users):
         source_rec = self.recommendation_loss("src", *source_batch)
         target_rec = self.recommendation_loss("tgt", *target_batch)
-        contrast = self.contrastive_loss(overlap_users)
+        contrast = self.contrastive_loss(
+            source_batch[0], target_batch[0], overlap_users
+        )
         recommendation = source_rec + target_rec
         total = (1.0 - self.contrast_weight) * recommendation
         total = total + self.contrast_weight * contrast
@@ -376,7 +379,7 @@ class DisCo(nn.Module):
     def cross_domain_logits(self, users, target_items):
         source_intents = self.source_encoder.encode_users(users)
         mapped_source = self.cross_domain_decoder(source_intents)
-        prior = self._intent_prior(mapped_source, self.target_prototypes)
+        prior = self._intent_prior(mapped_source, self.intent_prototypes)
 
         if target_items.ndim == 1:
             target_intents = self.target_encoder.encode_items(target_items)

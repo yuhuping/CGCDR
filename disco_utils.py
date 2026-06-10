@@ -111,12 +111,75 @@ class InteractionDataset(Dataset):
         )
 
 
-class OverlapUserDataset(Dataset):
-    def __init__(self, csv_path):
-        frame = pd.read_csv(csv_path, usecols=["uid"])
-        self.users = torch.from_numpy(
-            np.unique(frame["uid"].to_numpy(dtype=np.int64, copy=False))
+class DynamicInteractionDataset(Dataset):
+    """Deterministic epoch-wise uniform negative sampling."""
+
+    def __init__(self, csv_path, minimum_item, maximum_item, seed):
+        frame = pd.read_csv(csv_path, usecols=["uid", "pos_iid"])
+        users = frame["uid"].to_numpy(dtype=np.int64, copy=True)
+        positive_items = frame["pos_iid"].to_numpy(dtype=np.int64, copy=True)
+        self.users = torch.from_numpy(users)
+        self.positive_items = torch.from_numpy(positive_items)
+        self.minimum_item = minimum_item
+        self.item_count = maximum_item - minimum_item + 1
+        self.seed = int(seed)
+        self.epoch = 0
+
+        local_items = positive_items - minimum_item
+        self.positive_codes = np.unique(users * self.item_count + local_items)
+
+    def set_epoch(self, epoch):
+        self.epoch = int(epoch)
+
+    def __len__(self):
+        return len(self.users)
+
+    @staticmethod
+    def _mix(value):
+        value = (value + 0x9E3779B97F4A7C15) & 0xFFFFFFFFFFFFFFFF
+        value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & 0xFFFFFFFFFFFFFFFF
+        value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & 0xFFFFFFFFFFFFFFFF
+        return value ^ (value >> 31)
+
+    def _is_positive(self, code):
+        position = np.searchsorted(self.positive_codes, code)
+        return (
+            position < len(self.positive_codes)
+            and self.positive_codes[position] == code
         )
+
+    def __getitem__(self, index):
+        user = int(self.users[index])
+        base = (
+            self.seed
+            + self.epoch * 0xD1B54A32D192ED03
+            + int(index) * 0x94D049BB133111EB
+        )
+        attempt = 0
+        while True:
+            local_item = self._mix(base + attempt) % self.item_count
+            code = user * self.item_count + local_item
+            if not self._is_positive(code):
+                break
+            attempt += 1
+        negative_item = self.minimum_item + local_item
+        return (
+            self.users[index],
+            self.positive_items[index],
+            torch.tensor(negative_item, dtype=torch.long),
+        )
+
+
+class OverlapUserDataset(Dataset):
+    def __init__(self, source_csv_path, target_csv_path, overlapped_num_users):
+        source_users = pd.read_csv(
+            source_csv_path, usecols=["uid"]
+        )["uid"].to_numpy(dtype=np.int64, copy=False)
+        target_users = pd.read_csv(
+            target_csv_path, usecols=["uid"]
+        )["uid"].to_numpy(dtype=np.int64, copy=False)
+        users = np.intersect1d(source_users, target_users, assume_unique=False)
+        self.users = torch.from_numpy(users[users < overlapped_num_users])
 
     def __len__(self):
         return len(self.users)

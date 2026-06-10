@@ -6,7 +6,12 @@ import unittest
 import torch
 
 from disco import DisCo
-from disco_utils import build_domain_graph
+from disco_utils import (
+    DynamicInteractionDataset,
+    InteractionDataset,
+    OverlapUserDataset,
+    build_domain_graph,
+)
 
 
 class DisCoTest(unittest.TestCase):
@@ -80,6 +85,31 @@ class DisCoTest(unittest.TestCase):
         )
         self.assertEqual(tuple(scores.shape), (2, 2))
         self.assertTrue(torch.isfinite(scores).all())
+
+    def test_fixed_negatives_and_overlap_users(self):
+        dataset = InteractionDataset(self.source_path)
+        self.assertEqual(int(dataset[0][2]), 2)
+        overlap = OverlapUserDataset(
+            self.source_path, self.target_path, overlapped_num_users=3
+        )
+        self.assertEqual(set(overlap.users.tolist()), {0, 1, 2})
+
+    def test_dynamic_negatives_are_valid_and_reproducible(self):
+        first = DynamicInteractionDataset(self.source_path, 1, 4, seed=2025)
+        second = DynamicInteractionDataset(self.source_path, 1, 4, seed=2025)
+        epoch_zero = [int(first[index][2]) for index in range(len(first))]
+        self.assertEqual(
+            epoch_zero,
+            [int(second[index][2]) for index in range(len(second))],
+        )
+
+        positives = {(0, 1), (0, 2), (1, 2), (2, 3), (3, 4)}
+        for index, negative in enumerate(epoch_zero):
+            self.assertNotIn((int(first.users[index]), negative), positives)
+
+        first.set_epoch(1)
+        epoch_one = [int(first[index][2]) for index in range(len(first))]
+        self.assertNotEqual(epoch_zero, epoch_one)
 
 
 if __name__ == "__main__":

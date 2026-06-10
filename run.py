@@ -15,14 +15,14 @@ from disco import DisCo
 from disco_trainer import DisCoTrainer
 from disco_utils import load_or_build_domain_graph
 
-def setup_logging(task_name, info=""):
-    if not os.path.exists('log'):
-        os.makedirs('log')
+def setup_logging(task_name, info="", model_name="CGCDR"):
+    log_dir = os.path.join("log", "DisCo") if model_name.lower() == "disco" else "log"
+    os.makedirs(log_dir, exist_ok=True)
     
     if info:  
-        log_filename = f"log/{task_name}_{info}.log"
+        log_filename = os.path.join(log_dir, f"{task_name}_{info}.log")
     else:
-        log_filename = f"log/{task_name}.log"
+        log_filename = os.path.join(log_dir, f"{task_name}.log")
 
     logging.basicConfig(
         level=logging.INFO,
@@ -39,6 +39,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default='CGCDR')
     parser.add_argument('--seed', type=int, default=2025)
+    parser.add_argument('--eval_seed', type=int, default=2027)
     parser.add_argument('--epoch', type=int, default=1000)
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--stopping_step', type=int, default=20)
@@ -64,9 +65,10 @@ if __name__ == '__main__':
     parser.add_argument('--disco_beta', type=float, default=0.3)
     parser.add_argument('--disco_gamma', type=float, default=0.01)
     parser.add_argument('--disco_lambda', type=float, default=0.3)
+    parser.add_argument('--dynamic_neg_sampling', action='store_true')
     args = parser.parse_args()
 
-    logger = setup_logging(args.Task, args.info)
+    logger = setup_logging(args.Task, args.info, args.model)
     
     # Print all arguments
     logger.info("Arguments:")

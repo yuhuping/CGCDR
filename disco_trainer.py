@@ -6,8 +6,12 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from disco_utils import InteractionDataset, OverlapUserDataset
-from utils import TestSeqItemDataset, SeqItemDataset, sample_candidates
+from disco_utils import (
+    DynamicInteractionDataset,
+    InteractionDataset,
+    OverlapUserDataset,
+)
+from utils import TestSeqItemDataset, sample_candidates
 
 
 class DisCoTrainer:
@@ -21,7 +25,10 @@ class DisCoTrainer:
         self.target_end = data_info["total_num_items"]
         self.output_path = os.path.join("saved", args.Task)
         os.makedirs(self.output_path, exist_ok=True)
-        self.checkpoint_path = os.path.join(self.output_path, "DisCo_best.pt")
+        checkpoint_suffix = f"_{args.info}" if args.info else ""
+        self.checkpoint_path = os.path.join(
+            self.output_path, f"DisCo{checkpoint_suffix}_best.pt"
+        )
         self.logger = logging.getLogger(f"{args.Task}.DisCoTrainer")
 
     @staticmethod
@@ -32,29 +39,17 @@ class DisCoTrainer:
     def _move_batch(self, batch):
         return tuple(value.to(self.device) for value in batch)
 
-    def _validation_loss(self, loader):
-        self.model.eval()
-        total_loss = 0.0
-        with torch.no_grad():
-            for users, _, positive, negative in loader:
-                users = users.to(self.device)
-                positive = positive.to(self.device)
-                negative = negative.to(self.device)
-                loss = self.model.cross_domain_pair_loss(
-                    users, positive, negative
-                )
-                total_loss += loss.item()
-        return total_loss / max(1, len(loader))
-
     @torch.no_grad()
-    def evaluate_leave_one_out(self, dataset, negative_samples=999):
+    def evaluate_leave_one_out(
+        self, dataset, negative_samples=999, description="DisCo leave-one-out"
+    ):
         loader = DataLoader(dataset, batch_size=1, shuffle=False)
         self.model.eval()
         hits = {1: 0, 5: 0, 10: 0}
         ndcgs = {1: 0.0, 5: 0.0, 10: 0.0}
 
-        for users, _, positive, _, target_history in tqdm(
-            loader, desc="DisCo leave-one-out", ncols=100
+        for index, (users, _, positive, _, target_history) in enumerate(
+            tqdm(loader, desc=description, ncols=100)
         ):
             candidates = sample_candidates(
                 pos_id=positive.numpy(),
@@ -62,7 +57,7 @@ class DisCoTrainer:
                 MIN=self.target_start,
                 MAX=self.target_end,
                 neg_sample_size=negative_samples,
-                seed=self.args.seed + 2,
+                seed=self.args.eval_seed + index,
             )
             users = users.to(self.device)
             candidate_tensor = torch.tensor(
@@ -83,27 +78,34 @@ class DisCoTrainer:
         for k in hits:
             metrics[f"HR@{k}"] = hits[k] / total
             metrics[f"NDCG@{k}"] = ndcgs[k] / total
-            self.logger.info(
-                "HR@%d: %.4f, NDCG@%d: %.4f",
-                k,
-                metrics[f"HR@{k}"],
-                k,
-                metrics[f"NDCG@{k}"],
-            )
         return metrics
 
     def main(self):
         self.model.to(self.device)
-        source_data = InteractionDataset(
-            os.path.join(self.data_root, "stage1_train_src.csv")
-        )
-        target_data = InteractionDataset(
-            os.path.join(self.data_root, "stage1_train_tgt.csv")
-        )
+        source_path = os.path.join(self.data_root, "stage1_train_src.csv")
+        target_path = os.path.join(self.data_root, "stage1_train_tgt.csv")
+        if self.args.dynamic_neg_sampling:
+            source_data = DynamicInteractionDataset(
+                source_path,
+                minimum_item=1,
+                maximum_item=self.data_info["source_num_items"],
+                seed=self.args.seed,
+            )
+            target_data = DynamicInteractionDataset(
+                target_path,
+                minimum_item=self.target_start,
+                maximum_item=self.target_end,
+                seed=self.args.seed + 1,
+            )
+        else:
+            source_data = InteractionDataset(source_path)
+            target_data = InteractionDataset(target_path)
         overlap_data = OverlapUserDataset(
-            os.path.join(self.data_root, "stage1_train_meta.csv")
+            source_path,
+            target_path,
+            self.data_info["overlapped_num_users"],
         )
-        validation_data = SeqItemDataset(
+        validation_data = TestSeqItemDataset(
             os.path.join(self.data_root, "stage1_val.csv")
         )
         test_data = TestSeqItemDataset(
@@ -121,14 +123,9 @@ class DisCoTrainer:
             overlap_data,
             shuffle=True,
             batch_size=min(self.args.batch_size, len(overlap_data)),
+            drop_last=len(overlap_data) >= self.args.batch_size,
             num_workers=self.args.num_workers,
             pin_memory=torch.cuda.is_available(),
-        )
-        validation_loader = DataLoader(
-            validation_data,
-            batch_size=self.args.batch_size,
-            shuffle=False,
-            num_workers=self.args.num_workers,
         )
 
         optimizer = torch.optim.Adam(
@@ -136,10 +133,14 @@ class DisCoTrainer:
             lr=self.args.lr,
             weight_decay=self.args.weight_decay,
         )
-        best_validation = float("inf")
+        best_hr = -1.0
+        best_ndcg = -1.0
         stale_epochs = 0
 
         for epoch in range(self.args.epoch):
+            if self.args.dynamic_neg_sampling:
+                source_data.set_epoch(epoch)
+                target_data.set_epoch(epoch)
             self.model.train()
             source_iterator = self._cycle(source_loader)
             target_iterator = self._cycle(target_loader)
@@ -172,19 +173,31 @@ class DisCoTrainer:
                 progress.set_postfix(loss=f"{loss.item():.4f}")
 
             averages = {name: value / steps for name, value in totals.items()}
-            validation_loss = self._validation_loss(validation_loader)
+            validation = self.evaluate_leave_one_out(
+                validation_data,
+                negative_samples=self.args.eval_negatives,
+                description=f"DisCo validation {epoch}",
+            )
             self.logger.info(
-                "Epoch %d loss %.4f src %.4f tgt %.4f contrast %.4f val %.4f",
+                "Epoch %d loss %.4f src %.4f tgt %.4f contrast %.4f "
+                "val HR@10 %.4f NDCG@10 %.4f",
                 epoch,
                 averages["loss"],
                 averages["source_rec"],
                 averages["target_rec"],
                 averages["contrast"],
-                validation_loss,
+                validation["HR@10"],
+                validation["NDCG@10"],
             )
 
-            if validation_loss < best_validation:
-                best_validation = validation_loss
+            improved = validation["HR@10"] > best_hr
+            improved = improved or (
+                validation["HR@10"] == best_hr
+                and validation["NDCG@10"] > best_ndcg
+            )
+            if improved:
+                best_hr = validation["HR@10"]
+                best_ndcg = validation["NDCG@10"]
                 stale_epochs = 0
                 torch.save(self.model.state_dict(), self.checkpoint_path)
             else:
@@ -197,6 +210,14 @@ class DisCoTrainer:
         self.model.load_state_dict(
             torch.load(self.checkpoint_path, map_location=self.device)
         )
-        self.evaluate_leave_one_out(
+        metrics = self.evaluate_leave_one_out(
             test_data, negative_samples=self.args.eval_negatives
         )
+        for k in (1, 5, 10):
+            self.logger.info(
+                "HR@%d: %.4f, NDCG@%d: %.4f",
+                k,
+                metrics[f"HR@{k}"],
+                k,
+                metrics[f"NDCG@{k}"],
+            )
